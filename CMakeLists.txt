@@ -1,12 +1,30 @@
 cmake_minimum_required(VERSION 3.10.0)
 project(retosia VERSION 0.1.0 LANGUAGES C CXX)
 
+# =========================
+# C++20 (modern global setting)
+# =========================
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+
+include_directories(include)
+
+# =========================
+# Source files (recursive)
+# =========================
+file(GLOB_RECURSE RETOSIA_SOURCES
+    src/*.cpp
+)
+
 
 # =========================
 # Executable
 # =========================
 add_executable(retosia
-    main.cpp
+    src/main.cpp
+    ${RETOSIA_SOURCES}
 )
 
 # =========================

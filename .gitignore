@@ -130,3 +130,4 @@ desktop.ini
 *.ini
 
 external/
+tests/
