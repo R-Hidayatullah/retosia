@@ -1,7 +1,7 @@
-#if !defined(BINARY_READER_HPP)
+#pragma once
+#ifndef BINARY_READER_HPP
 #define BINARY_READER_HPP
 
-#pragma once
 #include <cstdint>
 #include <vector>
 #include <fstream>
@@ -9,13 +9,16 @@
 #include <stdexcept>
 #include <concepts>
 #include <type_traits>
+#include <algorithm>
 #include <sstream>
 #include <iomanip>
 
 namespace binreader
 {
 
-    // Custom exception for binary read errors
+    // =========================
+    // Custom exception
+    // =========================
     class BinaryReadError : public std::runtime_error
     {
     public:
@@ -32,15 +35,19 @@ namespace binreader
         static std::string format(const std::string &msg, std::size_t offset, std::size_t requested)
         {
             std::ostringstream ss;
-            ss << msg << " | offset: 0x" << std::hex << offset << " | requested: " << std::dec << requested << " bytes";
+            ss << msg << " | offset: 0x" << std::hex << offset
+               << " | requested: " << std::dec << requested << " bytes";
             return ss.str();
         }
     };
 
+    // =========================
+    // BinaryReader class
+    // =========================
     class BinaryReader
     {
     public:
-        // Constructors
+        // ---- Constructors ----
         BinaryReader(std::vector<uint8_t> data)
             : buffer_(std::move(data)), pos_(0), owns_buffer_(true) {}
 
@@ -52,32 +59,25 @@ namespace binreader
             fill_buffer();
         }
 
-        // Disable copy
+        // ---- Disable copy ----
         BinaryReader(const BinaryReader &) = delete;
         BinaryReader &operator=(const BinaryReader &) = delete;
 
-        // Moveable
+        // ---- Moveable ----
         BinaryReader(BinaryReader &&) noexcept = default;
         BinaryReader &operator=(BinaryReader &&) noexcept = default;
 
-        // Read arithmetic types
-        template <std::integral T>
+        // ---- Read arithmetic types (integral or floating) ----
+        template <typename T>
         T read()
         {
+            static_assert(std::is_arithmetic_v<T>, "BinaryReader::read<T> requires arithmetic type");
             T value{};
             read_bytes(reinterpret_cast<uint8_t *>(&value), sizeof(T));
             return value;
         }
 
-        template <std::floating_point T>
-        T read()
-        {
-            T value{};
-            read_bytes(reinterpret_cast<uint8_t *>(&value), sizeof(T));
-            return value;
-        }
-
-        // Read arbitrary bytes
+        // ---- Read arbitrary bytes ----
         void read_bytes(uint8_t *dest, std::size_t size)
         {
             if (owns_buffer_)
@@ -106,7 +106,7 @@ namespace binreader
             }
         }
 
-        // Seek in memory or file
+        // ---- Seek ----
         void seek(std::size_t offset)
         {
             if (owns_buffer_)
@@ -124,10 +124,7 @@ namespace binreader
             }
         }
 
-        std::size_t tell() const
-        {
-            return pos_;
-        }
+        std::size_t tell() const { return pos_; }
 
         bool eof() const
         {
@@ -146,7 +143,7 @@ namespace binreader
             pos_ = 0;
         }
 
-        // Members
+        // ---- Members ----
         std::ifstream file_;
         std::vector<uint8_t> buffer_;
         std::size_t pos_ = 0;
