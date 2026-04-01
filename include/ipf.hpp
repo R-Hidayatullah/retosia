@@ -34,6 +34,7 @@
 #include <future>
 #include <iostream>
 #include <map>
+#include <unordered_map>
 
 // zlib for raw DEFLATE
 #include <zlib.h>
@@ -755,6 +756,101 @@ namespace ipf
     inline void print_hex_viewer(const std::vector<uint8_t> &data, std::ostream &os = std::cout)
     {
         print_hex_viewer(data.data(), data.size(), os);
+    }
+
+    using LatestFileMap = std::unordered_map<std::string, IPFFileTable>;
+
+    // -------------------------------------------------------
+    //  Parse all .ipf files in a directory with limited threads,
+    //  and collect only the latest version of each file
+    // -------------------------------------------------------
+    inline LatestFileMap parse_latest_ipfs(
+        const std::filesystem::path &game_root, unsigned max_threads = 4)
+    {
+        auto data_dir = game_root / "data";
+        auto patch_dir = game_root / "patch";
+
+        // Function to parse a single directory
+        auto parse_dir = [max_threads](const std::filesystem::path &dir) -> std::vector<IPFRoot>
+        {
+            std::vector<std::filesystem::path> paths;
+            for (auto &entry : std::filesystem::directory_iterator(dir))
+                if (entry.path().extension() == ".ipf")
+                    paths.push_back(entry.path());
+
+            std::mutex paths_mutex, results_mutex;
+            std::size_t next_job = 0;
+            std::vector<IPFRoot> results;
+
+            auto worker = [&]()
+            {
+                for (;;)
+                {
+                    std::filesystem::path p;
+                    {
+                        std::scoped_lock lock(paths_mutex);
+                        if (next_job >= paths.size())
+                            return;
+                        p = paths[next_job++];
+                    }
+
+                    try
+                    {
+                        auto root = IPFRoot::from_file(p);
+                        std::scoped_lock lock(results_mutex);
+                        results.push_back(std::move(root));
+                    }
+                    catch (const std::exception &e)
+                    {
+                        std::cerr << "IPF: failed " << p << ": " << e.what() << '\n';
+                    }
+                }
+            };
+
+            std::vector<std::thread> threads;
+            threads.reserve(max_threads);
+            for (unsigned i = 0; i < max_threads; ++i)
+                threads.emplace_back(worker);
+            for (auto &t : threads)
+                t.join();
+
+            return results;
+        };
+
+        // Parse data and patch concurrently
+        auto fut_data = std::async(std::launch::async, [&]
+                                   { return parse_dir(data_dir); });
+        auto fut_patch = std::async(std::launch::async, [&]
+                                    { return parse_dir(patch_dir); });
+
+        auto data_ipfs = fut_data.get();
+        auto patch_ipfs = fut_patch.get();
+
+        // Merge all IPFs
+        std::vector<IPFRoot> all_ipfs;
+        all_ipfs.reserve(data_ipfs.size() + patch_ipfs.size());
+        all_ipfs.insert(all_ipfs.end(),
+                        std::make_move_iterator(data_ipfs.begin()),
+                        std::make_move_iterator(data_ipfs.end()));
+        all_ipfs.insert(all_ipfs.end(),
+                        std::make_move_iterator(patch_ipfs.begin()),
+                        std::make_move_iterator(patch_ipfs.end()));
+
+        // Build hashmap of latest files
+        LatestFileMap latest;
+        for (const auto &root : all_ipfs)
+        {
+            for (const auto &f : root.file_table)
+            {
+                auto it = latest.find(f.directory_name);
+                if (it == latest.end() || root.header.new_version >= it->second.file_pointer)
+                {
+                    latest[f.directory_name] = f;
+                }
+            }
+        }
+
+        return latest;
     }
 
 } // namespace ipf
