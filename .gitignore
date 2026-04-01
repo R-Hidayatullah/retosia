@@ -128,3 +128,5 @@ desktop.ini
 *.tmp
 *.cache
 *.ini
+
+external/
