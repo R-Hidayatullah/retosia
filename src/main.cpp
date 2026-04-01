@@ -19,13 +19,13 @@ int main()
     std::cout << "[Info] Using " << max_threads << " threads for IPF parsing\n";
 
     // 1️⃣ Parse all IPFs, keep latest version per file
-    auto latest_files = ipf::parse_game_ipfs_latest_from_filename(game_root, max_threads);
+    auto latest_files = ipf::parse_game_ipfs_latest_streamed(game_root, max_threads);
     auto t1 = std::chrono::high_resolution_clock::now();
     std::cout << "[Step 1] Parsed latest IPFs: " << latest_files.size()
               << " files in " << std::chrono::duration<double>(t1 - t0).count() << "s\n";
 
     // 2️⃣ Search for a specific file
-    const std::string target = "sound/skilvoice.lst";
+    const std::string target = "ies_client/xac.ies";
     auto it = latest_files.find(target);
     auto t2 = std::chrono::high_resolution_clock::now();
     std::cout << "[Step 2] Search time: " << std::chrono::duration<double>(t2 - t1).count() << "s\n";
@@ -55,4 +55,7 @@ int main()
     auto t_end = std::chrono::high_resolution_clock::now();
     std::cout << "[Total] Program runtime: "
               << std::chrono::duration<double>(t_end - t0).count() << "s\n";
+
+    std::cout << "Press Enter to exit...";
+    std::cin.get();
 }

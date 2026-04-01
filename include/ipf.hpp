@@ -694,40 +694,97 @@ namespace ipf
     }
 
     inline std::unordered_map<std::string, IPFFileTable>
-    parse_game_ipfs_latest_from_filename(const std::filesystem::path &game_root, unsigned max_threads = 4)
+    parse_game_ipfs_latest_streamed(const std::filesystem::path &game_root, unsigned max_threads = 4)
     {
-        auto data_ipfs = std::async(std::launch::async, [&]
-                                    { return parse_all_ipf_files_limited_threads(game_root / "data", max_threads); });
-        auto patch_ipfs = std::async(std::launch::async, [&]
-                                     { return parse_all_ipf_files_limited_threads(game_root / "patch", max_threads); });
+        std::vector<std::filesystem::path> ipf_paths;
 
-        std::vector<IPFRoot> all_roots = data_ipfs.get();
-        auto patch_roots = patch_ipfs.get();
-        all_roots.insert(all_roots.end(),
-                         std::make_move_iterator(patch_roots.begin()),
-                         std::make_move_iterator(patch_roots.end()));
+        // Collect all IPF files from data/ and patch/
+        for (auto &dir : {game_root / "data", game_root / "patch"})
+        {
+            if (!std::filesystem::exists(dir))
+                continue;
+            for (auto &entry : std::filesystem::directory_iterator(dir))
+                if (entry.path().extension() == ".ipf")
+                    ipf_paths.push_back(entry.path());
+        }
 
         std::unordered_map<std::string, IPFFileTable> latest_files;
+        std::mutex map_mutex;
+        std::atomic_size_t next_job{0};
 
-        for (auto &root : all_roots)
+        auto worker = [&]()
         {
-            for (auto &entry : root.file_table)
+            while (true)
             {
-                auto version = extract_version_from_filename(*entry.file_path);
+                std::size_t idx = next_job.fetch_add(1);
+                if (idx >= ipf_paths.size())
+                    return;
 
-                auto it = latest_files.find(entry.directory_name);
-                if (it == latest_files.end())
+                const auto &path = ipf_paths[idx];
+                try
                 {
-                    latest_files[entry.directory_name] = entry;
+                    // Open file and read footer/header
+                    std::ifstream f(path, std::ios::binary | std::ios::ate);
+                    if (!f)
+                        continue;
+
+                    auto file_size = f.tellg();
+                    f.seekg(file_size + HEADER_LOCATION, std::ios::beg);
+                    std::vector<uint8_t> header_buf(24);
+                    f.read(reinterpret_cast<char *>(header_buf.data()), 24);
+                    binreader::BinaryReader hr(std::move(header_buf));
+
+                    IPFHeader header;
+                    header.read(hr);
+
+                    // Read file table metadata only
+                    f.seekg(header.file_table_pointer, std::ios::beg);
+                    std::vector<uint8_t> table_buf(
+                        static_cast<std::size_t>(file_size) - header.file_table_pointer);
+                    f.read(reinterpret_cast<char *>(table_buf.data()), table_buf.size());
+                    binreader::BinaryReader tr(std::move(table_buf));
+
+                    for (uint16_t i = 0; i < header.file_count; ++i)
+                    {
+                        IPFFileTable entry;
+                        entry.read(tr);
+                        entry.file_path = path;
+
+                        // Prepend container stem to directory_name
+                        auto stem = std::filesystem::path(entry.container_name).stem().string();
+                        entry.directory_name = stem + "/" + entry.directory_name;
+
+                        auto version = extract_version_from_filename(path);
+
+                        // Update latest version safely
+                        {
+                            std::scoped_lock lock(map_mutex);
+                            auto it = latest_files.find(entry.directory_name);
+                            if (it == latest_files.end())
+                                latest_files[entry.directory_name] = entry;
+                            else
+                            {
+                                auto existing_version = extract_version_from_filename(*it->second.file_path);
+                                if (version > existing_version)
+                                    latest_files[entry.directory_name] = entry;
+                            }
+                        }
+                    }
                 }
-                else
+                catch (const std::exception &e)
                 {
-                    auto existing_version = extract_version_from_filename(*it->second.file_path);
-                    if (version > existing_version)
-                        latest_files[entry.directory_name] = entry;
+                    std::cerr << "IPF: failed " << path << ": " << e.what() << "\n";
                 }
             }
-        }
+        };
+
+        std::vector<std::thread> threads;
+        threads.reserve(max_threads);
+        for (unsigned i = 0; i < max_threads; ++i)
+            threads.emplace_back(worker);
+
+        for (auto &t : threads)
+            t.join();
 
         return latest_files;
     }
