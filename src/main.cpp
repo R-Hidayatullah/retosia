@@ -1,35 +1,31 @@
 #include <iostream>
-#include <fstream>
-#include "tok.hpp" // your TokParser and TokNode definitions
+#include "ipf.hpp"
 
 int main()
 {
     try
     {
-        // -----------------------------
-        // 1. Parse TOK file
-        // -----------------------------
-        tok::TokParser parser("tests/barrack4.tok"); // replace with your file path
-        tok::TokNode root = parser.parse();
+        // Parse a single .ipf file
+        ipf::IPFRoot root = ipf::IPFRoot::from_file("tests/xml_client.ipf");
 
-        // -----------------------------
-        // 2. Print TOK tree for debugging
-        // -----------------------------
-        tok::print_tok_tree(std::cout, root);
+        // Iterate over all files
+        for (auto &entry : root.file_table)
+        {
+            std::cout << entry.directory_name
+                      << " (compressed: " << entry.file_size_compressed
+                      << ", uncompressed: " << entry.file_size_uncompressed << ")\n";
 
-        // -----------------------------
-        // 3. Export mesh to SVG
-        // -----------------------------
-        std::ofstream svg_file("output.svg");
-        if (!svg_file)
-            throw std::runtime_error("Cannot create SVG file");
+            // Extract file bytes
+            std::vector<uint8_t> data = entry.extract_data();
 
-        tok::export_to_svg(root, svg_file, 600.0f, 600.0f);
-        std::cout << "SVG exported successfully to output.svg\n";
+            // Optionally: print a hex preview
+            ipf::print_hex_viewer(data, std::cout);
+            break;
+        }
     }
     catch (const std::exception &e)
     {
-        std::cerr << "Error: " << e.what() << '\n';
+        std::cerr << "Error: " << e.what() << "\n";
         return 1;
     }
 
