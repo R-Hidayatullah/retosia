@@ -1,6 +1,7 @@
 #if !defined(BINARY_READER_HPP)
 #define BINARY_READER_HPP
 
+#pragma once
 #include <cstdint>
 #include <vector>
 #include <fstream>
@@ -8,9 +9,33 @@
 #include <stdexcept>
 #include <concepts>
 #include <type_traits>
+#include <sstream>
+#include <iomanip>
 
 namespace binreader
 {
+
+    // Custom exception for binary read errors
+    class BinaryReadError : public std::runtime_error
+    {
+    public:
+        BinaryReadError(const std::string &msg, std::size_t offset = 0, std::size_t requested = 0)
+            : std::runtime_error(format(msg, offset, requested)), offset_(offset), requested_(requested) {}
+
+        std::size_t offset() const noexcept { return offset_; }
+        std::size_t requested() const noexcept { return requested_; }
+
+    private:
+        std::size_t offset_;
+        std::size_t requested_;
+
+        static std::string format(const std::string &msg, std::size_t offset, std::size_t requested)
+        {
+            std::ostringstream ss;
+            ss << msg << " | offset: 0x" << std::hex << offset << " | requested: " << std::dec << requested << " bytes";
+            return ss.str();
+        }
+    };
 
     class BinaryReader
     {
@@ -23,7 +48,7 @@ namespace binreader
             : file_(filename, std::ios::binary), buffer_(buffer_size), pos_(0), owns_buffer_(false)
         {
             if (!file_)
-                throw std::runtime_error("Cannot open file: " + filename);
+                throw BinaryReadError("Cannot open file: " + filename);
             fill_buffer();
         }
 
@@ -58,7 +83,7 @@ namespace binreader
             if (owns_buffer_)
             {
                 if (pos_ + size > buffer_.size())
-                    throw std::runtime_error("Out of bounds read in memory buffer");
+                    throw BinaryReadError("Out of bounds read in memory buffer", pos_, size);
                 std::copy(buffer_.begin() + pos_, buffer_.begin() + pos_ + size, dest);
                 pos_ += size;
             }
@@ -71,7 +96,7 @@ namespace binreader
                     {
                         fill_buffer();
                         if (buffer_filled_ == 0)
-                            throw std::runtime_error("Unexpected end of file");
+                            throw BinaryReadError("Unexpected end of file", pos_, size - read_count);
                     }
                     std::size_t to_copy = std::min(size - read_count, buffer_filled_ - pos_);
                     std::copy(buffer_.begin() + pos_, buffer_.begin() + pos_ + to_copy, dest + read_count);
@@ -87,12 +112,14 @@ namespace binreader
             if (owns_buffer_)
             {
                 if (offset > buffer_.size())
-                    throw std::runtime_error("Seek out of bounds in memory buffer");
+                    throw BinaryReadError("Seek out of bounds in memory buffer", offset);
                 pos_ = offset;
             }
             else
             {
                 file_.seekg(offset, std::ios::beg);
+                if (!file_)
+                    throw BinaryReadError("Failed to seek file", offset);
                 pos_ = buffer_filled_ = 0;
             }
         }
