@@ -1,6 +1,7 @@
 #include <iostream>
 #include <chrono>
 #include <unordered_map>
+#include <thread> // for hardware_concurrency
 #include "ipf.hpp"
 
 int main()
@@ -10,8 +11,15 @@ int main()
 
     auto t0 = std::chrono::high_resolution_clock::now();
 
+    // Detect max threads from CPU
+    unsigned max_threads = std::thread::hardware_concurrency();
+    if (max_threads == 0) // fallback if detection fails
+        max_threads = 4;
+
+    std::cout << "[Info] Using " << max_threads << " threads for IPF parsing\n";
+
     // 1️⃣ Parse all IPFs, keep latest version per file
-    auto latest_files = ipf::parse_game_ipfs_latest_from_filename(game_root, 8); // returns unordered_map<std::string, IPFFileTable>
+    auto latest_files = ipf::parse_game_ipfs_latest_from_filename(game_root, max_threads);
     auto t1 = std::chrono::high_resolution_clock::now();
     std::cout << "[Step 1] Parsed latest IPFs: " << latest_files.size()
               << " files in " << std::chrono::duration<double>(t1 - t0).count() << "s\n";
@@ -38,9 +46,6 @@ int main()
                   << data.size() << " bytes\n";
         std::cout << "[Step 3] Extraction time: "
                   << std::chrono::duration<double>(t3_end - t3_start).count() << "s\n";
-
-        // Optional hex dump
-        // ipf::print_hex_viewer(data, std::cout);
     }
     else
     {
