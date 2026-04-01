@@ -558,58 +558,6 @@ namespace ipf
     };
 
     // -------------------------------------------------------
-    //  FileSizeStats
-    // -------------------------------------------------------
-    struct FileSizeStats
-    {
-        uint32_t count_duplicated{0};
-        uint32_t count_unique{0};
-        uint32_t compressed_lowest{0};
-        uint32_t compressed_highest{0};
-        uint32_t compressed_avg{0};
-        uint32_t uncompressed_lowest{0};
-        uint32_t uncompressed_highest{0};
-        uint32_t uncompressed_avg{0};
-    };
-
-    inline FileSizeStats compute_ipf_file_stats(const std::vector<IPFRoot> &ipfs)
-    {
-        uint64_t compressed_sum = 0;
-        uint64_t uncompressed_sum = 0;
-        uint32_t count = 0;
-        uint32_t compressed_lo = UINT32_MAX;
-        uint32_t compressed_hi = 0;
-        uint32_t uncompressed_lo = UINT32_MAX;
-        uint32_t uncompressed_hi = 0;
-
-        for (auto &ipf : ipfs)
-            for (auto &f : ipf.file_table)
-            {
-                ++count;
-                compressed_sum += f.file_size_compressed;
-                uncompressed_sum += f.file_size_uncompressed;
-                compressed_lo = std::min(compressed_lo, f.file_size_compressed);
-                compressed_hi = std::max(compressed_hi, f.file_size_compressed);
-                uncompressed_lo = std::min(uncompressed_lo, f.file_size_uncompressed);
-                uncompressed_hi = std::max(uncompressed_hi, f.file_size_uncompressed);
-            }
-
-        if (count == 0)
-            return {};
-
-        return FileSizeStats{
-            count,
-            0,
-            compressed_lo,
-            compressed_hi,
-            static_cast<uint32_t>(compressed_sum / count),
-            uncompressed_lo,
-            uncompressed_hi,
-            static_cast<uint32_t>(uncompressed_sum / count),
-        };
-    }
-
-    // -------------------------------------------------------
     //  Parallel batch parsing
     // -------------------------------------------------------
 
@@ -680,46 +628,6 @@ namespace ipf
         return all;
     }
 
-    // Drain all file tables out of parsed roots into a flat vector.
-    inline std::vector<IPFFileTable> collect_file_tables(std::vector<IPFRoot> &parsed_ipfs)
-    {
-        std::vector<IPFFileTable> all;
-        for (auto &root : parsed_ipfs)
-        {
-            all.insert(all.end(),
-                       std::make_move_iterator(root.file_table.begin()),
-                       std::make_move_iterator(root.file_table.end()));
-            root.file_table.clear();
-        }
-        return all;
-    }
-
-    // Sort: by parent folder first, then by filename.
-    inline void sort_file_tables_by_folder_then_name(std::vector<IPFFileTable> &tables)
-    {
-        std::sort(tables.begin(), tables.end(),
-                  [](const IPFFileTable &a, const IPFFileTable &b)
-                  {
-                      if (!a.file_path || !b.file_path)
-                          return false;
-                      auto pa = a.file_path->parent_path();
-                      auto pb = b.file_path->parent_path();
-                      if (pa != pb)
-                          return pa < pb;
-                      return a.file_path->filename() < b.file_path->filename();
-                  });
-    }
-
-    // Group file tables by directory_name.
-    inline std::map<std::string, std::vector<IPFFileTable>>
-    group_file_tables_by_directory(std::vector<IPFFileTable> tables)
-    {
-        std::map<std::string, std::vector<IPFFileTable>> result;
-        for (auto &f : tables)
-            result[f.directory_name].push_back(std::move(f));
-        return result;
-    }
-
     // -------------------------------------------------------
     //  Hex dump utility
     // -------------------------------------------------------
@@ -758,99 +666,70 @@ namespace ipf
         print_hex_viewer(data.data(), data.size(), os);
     }
 
-    using LatestFileMap = std::unordered_map<std::string, IPFFileTable>;
-
-    // -------------------------------------------------------
-    //  Parse all .ipf files in a directory with limited threads,
-    //  and collect only the latest version of each file
-    // -------------------------------------------------------
-    inline LatestFileMap parse_latest_ipfs(
-        const std::filesystem::path &game_root, unsigned max_threads = 4)
+    inline uint64_t extract_version_from_filename(const std::filesystem::path &p)
     {
-        auto data_dir = game_root / "data";
-        auto patch_dir = game_root / "patch";
-
-        // Function to parse a single directory
-        auto parse_dir = [max_threads](const std::filesystem::path &dir) -> std::vector<IPFRoot>
+        auto name = p.stem().string(); // "153320_001001" or "addon"
+        auto pos = name.find('_');
+        if (pos == std::string::npos)
         {
-            std::vector<std::filesystem::path> paths;
-            for (auto &entry : std::filesystem::directory_iterator(dir))
-                if (entry.path().extension() == ".ipf")
-                    paths.push_back(entry.path());
-
-            std::mutex paths_mutex, results_mutex;
-            std::size_t next_job = 0;
-            std::vector<IPFRoot> results;
-
-            auto worker = [&]()
+            // No underscore, try to parse the entire stem as number
+            try
             {
-                for (;;)
-                {
-                    std::filesystem::path p;
-                    {
-                        std::scoped_lock lock(paths_mutex);
-                        if (next_job >= paths.size())
-                            return;
-                        p = paths[next_job++];
-                    }
+                return std::stoull(name);
+            }
+            catch (...)
+            {
+                return 0; // fallback for non-numeric filenames
+            }
+        }
+        std::string number_str = name.substr(0, pos);
+        try
+        {
+            return std::stoull(number_str); // convert to uint64_t
+        }
+        catch (...)
+        {
+            return 0; // fallback if prefix is not numeric
+        }
+    }
 
-                    try
-                    {
-                        auto root = IPFRoot::from_file(p);
-                        std::scoped_lock lock(results_mutex);
-                        results.push_back(std::move(root));
-                    }
-                    catch (const std::exception &e)
-                    {
-                        std::cerr << "IPF: failed " << p << ": " << e.what() << '\n';
-                    }
+    inline std::unordered_map<std::string, IPFFileTable>
+    parse_game_ipfs_latest_from_filename(const std::filesystem::path &game_root, unsigned max_threads = 4)
+    {
+        auto data_ipfs = std::async(std::launch::async, [&]
+                                    { return parse_all_ipf_files_limited_threads(game_root / "data", max_threads); });
+        auto patch_ipfs = std::async(std::launch::async, [&]
+                                     { return parse_all_ipf_files_limited_threads(game_root / "patch", max_threads); });
+
+        std::vector<IPFRoot> all_roots = data_ipfs.get();
+        auto patch_roots = patch_ipfs.get();
+        all_roots.insert(all_roots.end(),
+                         std::make_move_iterator(patch_roots.begin()),
+                         std::make_move_iterator(patch_roots.end()));
+
+        std::unordered_map<std::string, IPFFileTable> latest_files;
+
+        for (auto &root : all_roots)
+        {
+            for (auto &entry : root.file_table)
+            {
+                auto version = extract_version_from_filename(*entry.file_path);
+
+                auto it = latest_files.find(entry.directory_name);
+                if (it == latest_files.end())
+                {
+                    latest_files[entry.directory_name] = entry;
                 }
-            };
-
-            std::vector<std::thread> threads;
-            threads.reserve(max_threads);
-            for (unsigned i = 0; i < max_threads; ++i)
-                threads.emplace_back(worker);
-            for (auto &t : threads)
-                t.join();
-
-            return results;
-        };
-
-        // Parse data and patch concurrently
-        auto fut_data = std::async(std::launch::async, [&]
-                                   { return parse_dir(data_dir); });
-        auto fut_patch = std::async(std::launch::async, [&]
-                                    { return parse_dir(patch_dir); });
-
-        auto data_ipfs = fut_data.get();
-        auto patch_ipfs = fut_patch.get();
-
-        // Merge all IPFs
-        std::vector<IPFRoot> all_ipfs;
-        all_ipfs.reserve(data_ipfs.size() + patch_ipfs.size());
-        all_ipfs.insert(all_ipfs.end(),
-                        std::make_move_iterator(data_ipfs.begin()),
-                        std::make_move_iterator(data_ipfs.end()));
-        all_ipfs.insert(all_ipfs.end(),
-                        std::make_move_iterator(patch_ipfs.begin()),
-                        std::make_move_iterator(patch_ipfs.end()));
-
-        // Build hashmap of latest files
-        LatestFileMap latest;
-        for (const auto &root : all_ipfs)
-        {
-            for (const auto &f : root.file_table)
-            {
-                auto it = latest.find(f.directory_name);
-                if (it == latest.end() || root.header.new_version >= it->second.file_pointer)
+                else
                 {
-                    latest[f.directory_name] = f;
+                    auto existing_version = extract_version_from_filename(*it->second.file_path);
+                    if (version > existing_version)
+                        latest_files[entry.directory_name] = entry;
                 }
             }
         }
 
-        return latest;
+        return latest_files;
     }
 
 } // namespace ipf
