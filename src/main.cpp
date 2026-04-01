@@ -1,24 +1,37 @@
-#include "ies.hpp"
-#include "ies_print.hpp"
 #include <iostream>
-
-#ifdef _WIN32
-#include <windows.h>
-struct Utf8Console
-{
-    Utf8Console() { SetConsoleOutputCP(CP_UTF8); }
-} utf8console;
-#endif
+#include <fstream>
+#include "tok.hpp" // your TokParser and TokNode definitions
 
 int main()
 {
     try
     {
-        auto root = ies::IESRoot::from_file("tests/cell.ies");
-        std::cout << root << "\n";
+        // -----------------------------
+        // 1. Parse TOK file
+        // -----------------------------
+        tok::TokParser parser("tests/barrack4.tok"); // replace with your file path
+        tok::TokNode root = parser.parse();
+
+        // -----------------------------
+        // 2. Print TOK tree for debugging
+        // -----------------------------
+        tok::print_tok_tree(std::cout, root);
+
+        // -----------------------------
+        // 3. Export mesh to SVG
+        // -----------------------------
+        std::ofstream svg_file("output.svg");
+        if (!svg_file)
+            throw std::runtime_error("Cannot create SVG file");
+
+        tok::export_to_svg(root, svg_file, 600.0f, 600.0f);
+        std::cout << "SVG exported successfully to output.svg\n";
     }
-    catch (const binreader::BinaryReadError &e)
+    catch (const std::exception &e)
     {
-        std::cerr << "Binary read failed: " << e.what() << "\n";
+        std::cerr << "Error: " << e.what() << '\n';
+        return 1;
     }
+
+    return 0;
 }
