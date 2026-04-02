@@ -62,7 +62,7 @@ add_library(stb
 )
 
 target_include_directories(stb PUBLIC
-    external/stb-master/include
+    external/stb-master
 )
 
 target_link_libraries(retosia PRIVATE stb)
