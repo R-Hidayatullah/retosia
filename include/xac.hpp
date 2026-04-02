@@ -31,6 +31,21 @@ namespace xac
 {
 
     // -------------------------------------------------------
+    // XACAttribute (strongly-typed enum)
+    // -------------------------------------------------------
+    enum class XACAttribute : uint32_t
+    {
+        AttribPositions = 0,     // Vector3 (required)
+        AttribNormals = 1,       // Vector3 (required)
+        AttribTangents = 2,      // Vector4
+        AttribUvcoords = 3,      // Vector2
+        AttribColors32 = 4,      // uint32
+        AttribOrgvtxnumbers = 5, // uint32 (required)
+        AttribColors128 = 6,     // RGBAColor
+        AttribBitangents = 7     // Vector3 (optional)
+    };
+
+    // -------------------------------------------------------
     //  Chunk ID constants
     // -------------------------------------------------------
     enum class XACChunkId : uint32_t
