@@ -472,7 +472,7 @@ void main()
                                          float dx = static_cast<float>(xp) - s->last_mouse_.x;
                                          float dy = static_cast<float>(yp) - s->last_mouse_.y;
                                          s->last_mouse_ = {static_cast<float>(xp), static_cast<float>(yp)};
-                                         s->camera_.orbit(dx, -dy); // invert Y → drag up = orbit upward
+                                         s->camera_.orbit(dx, dy);
                                      });
 
             glfwSetScrollCallback(window_,
