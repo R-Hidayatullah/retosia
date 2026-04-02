@@ -57,8 +57,17 @@ MeshGPU upload_mesh_to_gpu(const scene::SubMesh &sub)
     glBindVertexArray(gpu.vao);
 
     std::vector<float> vertex_data;
-    for (auto &v : sub.positions)
-        vertex_data.push_back(v.x), vertex_data.push_back(v.y), vertex_data.push_back(v.z);
+    for (size_t i = 0; i < sub.positions.size(); ++i)
+    {
+        auto &v = sub.positions[i];
+        auto &n = sub.normals[i];
+        vertex_data.push_back(v.x);
+        vertex_data.push_back(v.y);
+        vertex_data.push_back(v.z);
+        vertex_data.push_back(n.x);
+        vertex_data.push_back(n.y);
+        vertex_data.push_back(n.z);
+    }
 
     glBindBuffer(GL_ARRAY_BUFFER, gpu.vbo);
     glBufferData(GL_ARRAY_BUFFER, vertex_data.size() * sizeof(float), vertex_data.data(), GL_STATIC_DRAW);
@@ -67,8 +76,11 @@ MeshGPU upload_mesh_to_gpu(const scene::SubMesh &sub)
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sub.indices.size() * sizeof(uint32_t), sub.indices.data(), GL_STATIC_DRAW);
     gpu.index_count = static_cast<GLsizei>(sub.indices.size());
 
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void *)0);
+    glEnableVertexAttribArray(0); // position
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void *)0);
+
+    glEnableVertexAttribArray(1); // normal
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void *)(3 * sizeof(float)));
 
     glBindVertexArray(0);
     return gpu;
@@ -95,13 +107,49 @@ GLuint create_shader_program()
     const char *vert_src = R"(
         #version 330 core
         layout(location=0) in vec3 aPos;
+        layout(location=1) in vec3 aNormal;
+
         uniform mat4 uMVP;
-        void main() { gl_Position = uMVP * vec4(aPos,1.0); })";
+        uniform mat4 uModel;
+
+        out vec3 FragPos;
+        out vec3 Normal;
+
+        void main()
+        {
+            FragPos = vec3(uModel * vec4(aPos, 1.0));
+            Normal = mat3(transpose(inverse(uModel))) * aNormal;
+            gl_Position = uMVP * vec4(aPos,1.0);
+        })";
 
     const char *frag_src = R"(
         #version 330 core
         out vec4 FragColor;
-        void main() { FragColor = vec4(0.8,0.8,0.8,1.0); })";
+
+        in vec3 FragPos;
+        in vec3 Normal;
+
+        uniform vec3 lightDirs[3];
+        uniform vec3 lightColors[3];
+        uniform vec3 viewPos;
+
+        void main()
+        {
+            vec3 norm = normalize(Normal);
+            vec3 viewDir = normalize(viewPos - FragPos);
+            vec3 result = vec3(0.0);
+
+            for(int i=0;i<3;i++)
+            {
+                vec3 lightDir = normalize(-lightDirs[i]);
+                float diff = max(dot(norm, lightDir),0.0);
+                vec3 reflectDir = reflect(-lightDir,norm);
+                float spec = pow(max(dot(viewDir,reflectDir),0.0),32.0);
+                result += (0.2 + 0.8*diff + 0.5*spec) * lightColors[i];
+            }
+
+            FragColor = vec4(result,1.0);
+        })";
 
     GLuint vert = compile_shader(GL_VERTEX_SHADER, vert_src);
     GLuint frag = compile_shader(GL_FRAGMENT_SHADER, frag_src);
@@ -132,7 +180,6 @@ void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
         left_drag = (action == GLFW_PRESS);
     if (button == GLFW_MOUSE_BUTTON_MIDDLE)
         middle_drag = (action == GLFW_PRESS);
-
     glfwGetCursorPos(window, &last_x, &last_y);
 }
 
@@ -150,12 +197,11 @@ void cursor_position_callback(GLFWwindow *window, double xpos, double ypos)
 
     if (middle_drag)
     {
-        // true panning (vertical + horizontal)
         glm::vec3 right = glm::normalize(glm::cross(glm::vec3(0, 1, 0),
                                                     glm::normalize(cam_target - glm::vec3(0, 0, 0))));
         glm::vec3 up = glm::vec3(0, 1, 0);
         cam_target -= right * static_cast<float>(dx) * 0.01f;
-        cam_target += up * static_cast<float>(dy) * 0.01f; // vertical pan keeps drag direction correct
+        cam_target += up * static_cast<float>(dy) * 0.01f;
     }
 
     last_x = xpos;
@@ -177,8 +223,55 @@ void framebuffer_size_callback(GLFWwindow *window, int width, int height)
 void init_cube()
 {
     float vertices[] = {
-        -0.5f, -0.5f, -0.5f, 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, -0.5f, 0.5f, -0.5f,
-        -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f};
+        -0.5f,
+        -0.5f,
+        -0.5f,
+        0,
+        0,
+        -1,
+        0.5f,
+        -0.5f,
+        -0.5f,
+        0,
+        0,
+        -1,
+        0.5f,
+        0.5f,
+        -0.5f,
+        0,
+        0,
+        -1,
+        -0.5f,
+        0.5f,
+        -0.5f,
+        0,
+        0,
+        -1,
+        -0.5f,
+        -0.5f,
+        0.5f,
+        0,
+        0,
+        1,
+        0.5f,
+        -0.5f,
+        0.5f,
+        0,
+        0,
+        1,
+        0.5f,
+        0.5f,
+        0.5f,
+        0,
+        0,
+        1,
+        -0.5f,
+        0.5f,
+        0.5f,
+        0,
+        0,
+        1,
+    };
     uint32_t indices[] = {
         0, 1, 2, 2, 3, 0,
         4, 5, 6, 6, 7, 4,
@@ -199,7 +292,9 @@ void init_cube()
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
 
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void *)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void *)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void *)(3 * sizeof(float)));
     glBindVertexArray(0);
 }
 
@@ -226,19 +321,29 @@ int main()
 
         if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
             return -1;
-
         glEnable(GL_DEPTH_TEST);
         glfwSwapInterval(1);
 
         GLuint shader = create_shader_program();
         init_cube();
 
+        // Lights
+        glm::vec3 light_dirs[3] = {
+            glm::normalize(glm::vec3(1, 1, 0)),
+            glm::normalize(glm::vec3(-1, 1, 1)),
+            glm::normalize(glm::vec3(0, 1, -1))};
+        glm::vec3 light_colors[3] = {
+            glm::vec3(1.0f),
+            glm::vec3(0.7f),
+            glm::vec3(0.4f)};
+
         tp::ThreadPool pool;
 
         std::shared_ptr<loader::IPFManager> ipf_manager_ptr;
         pool.submit([&]()
                     {
-            try {
+            try
+            {
                 ipf_manager_ptr = std::make_shared<loader::IPFManager>(
                     R"(C:\Program Files (x86)\Steam\steamapps\common\TreeOfSavior)", pool);
 
@@ -247,14 +352,16 @@ int main()
                 auto mesh_map = ies_root.extract_mesh_path_map();
 
                 loader::SceneLoader loader(ipf_manager_ptr, mesh_map);
-                std::string path = "bg/hi_entity/barrack.3dworld";
+                std::string path = "bg/hi_entity/id_thorn2.3dworld";
                 auto data3d = ipf_manager_ptr->extract(path);
                 auto scenes = loader.load(path, data3d);
 
                 std::lock_guard<std::mutex> lock(g_scene_mutex);
                 g_loaded_scenes = std::move(scenes);
                 g_ready_to_render = true;
-            } catch(const std::exception &e) {
+            }
+            catch(const std::exception &e)
+            {
                 std::cerr << "Load error: " << e.what() << "\n";
             } });
 
@@ -268,29 +375,37 @@ int main()
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
             glUseProgram(shader);
-            GLint loc = glGetUniformLocation(shader, "uMVP");
+            GLint locMVP = glGetUniformLocation(shader, "uMVP");
+            GLint locModel = glGetUniformLocation(shader, "uModel");
+            GLint locDirs = glGetUniformLocation(shader, "lightDirs");
+            GLint locCols = glGetUniformLocation(shader, "lightColors");
+            GLint locView = glGetUniformLocation(shader, "viewPos");
 
             int width, height;
             glfwGetFramebufferSize(window, &width, &height);
-            glm::mat4 proj = glm::perspective(glm::radians(45.0f),
-                                              float(width) / float(height), 0.1f, 1000.0f);
+            glm::mat4 proj = glm::perspective(glm::radians(45.0f), float(width) / float(height), 0.1f, 50000.0f);
+
+            glm::vec3 cam_pos = cam_target + glm::vec3(
+                                                 cos(cam_yaw) * cos(cam_pitch),
+                                                 sin(cam_pitch),
+                                                 sin(cam_yaw) * cos(cam_pitch)) *
+                                                 cam_distance;
+
+            glUniform3fv(locDirs, 3, &light_dirs[0][0]);
+            glUniform3fv(locCols, 3, &light_colors[0][0]);
+            glUniform3fv(locView, 1, &cam_pos[0]);
+
+            glm::mat4 view = glm::lookAt(cam_pos, cam_target, glm::vec3(0, 1, 0));
+            glm::mat4 vp = proj * view;
 
             if (!g_ready_to_render)
             {
-                // Placeholder cube
                 cube_angle += 0.01f;
-
-                glm::vec3 cam_pos = cam_target + glm::vec3(
-                                                     cos(cam_yaw) * cos(cam_pitch),
-                                                     sin(cam_pitch),
-                                                     sin(cam_yaw) * cos(cam_pitch)) *
-                                                     cam_distance;
-
-                glm::mat4 view = glm::lookAt(cam_pos, cam_target, glm::vec3(0, 1, 0));
                 glm::mat4 model = glm::rotate(glm::mat4(1.0f), cube_angle, glm::vec3(0, 1, 0));
-                glm::mat4 mvp = proj * view * model;
+                glm::mat4 mvp = vp * model;
+                glUniformMatrix4fv(locMVP, 1, GL_FALSE, &mvp[0][0]);
+                glUniformMatrix4fv(locModel, 1, GL_FALSE, &model[0][0]);
 
-                glUniformMatrix4fv(loc, 1, GL_FALSE, &mvp[0][0]);
                 glBindVertexArray(cube.vao);
                 glDrawElements(GL_TRIANGLES, cube.index_count, GL_UNSIGNED_INT, 0);
                 glBindVertexArray(0);
@@ -327,15 +442,6 @@ int main()
                                     gpu_meshes.push_back(upload_mesh_to_gpu(sub));
                 }
 
-                glm::vec3 cam_pos = cam_target + glm::vec3(
-                                                     cos(cam_yaw) * cos(cam_pitch),
-                                                     sin(cam_pitch),
-                                                     sin(cam_yaw) * cos(cam_pitch)) *
-                                                     cam_distance;
-
-                glm::mat4 view = glm::lookAt(cam_pos, cam_target, glm::vec3(0, 1, 0));
-                glm::mat4 vp = proj * view;
-
                 size_t idx = 0;
                 for (auto &scene : g_loaded_scenes)
                     for (auto &node : scene.root_nodes)
@@ -349,7 +455,8 @@ int main()
                             model = glm::scale(model, glm::vec3(node.scale->x, node.scale->y, node.scale->z));
 
                         glm::mat4 mvp = vp * model;
-                        glUniformMatrix4fv(loc, 1, GL_FALSE, &mvp[0][0]);
+                        glUniformMatrix4fv(locMVP, 1, GL_FALSE, &mvp[0][0]);
+                        glUniformMatrix4fv(locModel, 1, GL_FALSE, &model[0][0]);
 
                         if (node.model)
                             for (auto &sub : node.model->submeshes)
