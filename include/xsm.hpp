@@ -36,6 +36,25 @@ namespace xsm
 {
 
     // -------------------------------------------------------
+    // Wavelet types used during compression
+    // -------------------------------------------------------
+    enum class WaveletType : uint8_t
+    {
+        Haar = 0,
+        D4 = 1,
+        CDF97 = 2,
+    };
+
+    // -------------------------------------------------------
+    // Compressor types for quantized data
+    // -------------------------------------------------------
+    enum class CompressorType : uint8_t
+    {
+        Huffman = 0,
+        Rice = 1,
+    };
+
+    // -------------------------------------------------------
     //  Chunk ID constants
     // -------------------------------------------------------
     enum class XSMChunkId : uint32_t

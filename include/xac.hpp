@@ -31,6 +31,169 @@ namespace xac
 {
 
     // -------------------------------------------------------
+    // Skeletal motion types
+    // -------------------------------------------------------
+    enum class SkeletalMotionType : uint32_t
+    {
+        Normal = 0,  // Regular keyframe and keytrack based skeletal motion
+        Wavelet = 1, // Wavelet compressed skeletal motion
+    };
+
+    // -------------------------------------------------------
+    // File types
+    // -------------------------------------------------------
+    enum class FileType : uint32_t
+    {
+        Unknown = 0,
+        Actor,
+        SkeletalMotion,
+        WaveletSkeletalMotion,
+        PmorphMotion
+    };
+
+    // -------------------------------------------------------
+    // Shared chunk IDs
+    // -------------------------------------------------------
+    enum class SharedChunk : uint32_t
+    {
+        MotionEventTable = 50,
+        Timestamp = 51,
+    };
+
+    // -------------------------------------------------------
+    // Matrix multiplication order
+    // -------------------------------------------------------
+    enum class MatrixMulOrder : uint32_t
+    {
+        ScaleRotTrans = 0,
+        RotScaleTrans = 1,
+    };
+
+    // -------------------------------------------------------
+    // Mesh types
+    // -------------------------------------------------------
+    enum class MeshType : uint32_t
+    {
+        Static = 0,
+        Dynamic = 1,
+        GpuSkinned = 2
+    };
+
+    // -------------------------------------------------------
+    // Phoneme set (bitflags)
+    // -------------------------------------------------------
+    enum class PhonemeSet : uint32_t
+    {
+        None = 0,
+        NeutralPose = 1 << 0,
+        MBPX = 1 << 1,
+        AaAoOw = 1 << 2,
+        IhAeAhEyAyH = 1 << 3,
+        Aw = 1 << 4,
+        NNgChJDhDGTKZZhThSSh = 1 << 5,
+        IyEhY = 1 << 6,
+        UwUhOy = 1 << 7,
+        FV = 1 << 8,
+        LEl = 1 << 9,
+        W = 1 << 10,
+        REr = 1 << 11,
+    };
+
+    // -------------------------------------------------------
+    // Wavelet types
+    // -------------------------------------------------------
+    enum class WaveletType : uint32_t
+    {
+        Haar = 0,
+        Daub4 = 1,
+        Cdf97 = 2
+    };
+
+    // -------------------------------------------------------
+    // Node flags (bitflags)
+    // -------------------------------------------------------
+    enum class NodeFlags : uint32_t
+    {
+        IncludeInBoundsCalc = 1 << 0,
+        Attachment = 1 << 1,
+    };
+
+    // -------------------------------------------------------
+    // Planes
+    // -------------------------------------------------------
+    enum class Plane : uint32_t
+    {
+        XY = 0,
+        XZ = 1,
+        YZ = 2
+    };
+
+    // -------------------------------------------------------
+    // Dependency type (bitflags)
+    // -------------------------------------------------------
+    enum class DependencyType : uint32_t
+    {
+        Meshes = 1 << 0,
+        Transforms = 1 << 1,
+    };
+
+    // -------------------------------------------------------
+    // Repositioning mask (bitflags)
+    // -------------------------------------------------------
+    enum class RepositioningMask : uint32_t
+    {
+        Position = 1 << 0,
+        Rotation = 1 << 1,
+        Scale = 1 << 2,
+    };
+
+    // -------------------------------------------------------
+    // Multiplication order
+    // -------------------------------------------------------
+    enum class MultiplicationOrder : uint32_t
+    {
+        ScaleRotationTranslation = 0,
+        RotationScaleTranslation = 1,
+    };
+
+    // -------------------------------------------------------
+    // Limit types (bitflags)
+    // -------------------------------------------------------
+    enum class LimitType : uint32_t
+    {
+        TranslationX = 1 << 0,
+        TranslationY = 1 << 1,
+        TranslationZ = 1 << 2,
+        RotationX = 1 << 3,
+        RotationY = 1 << 4,
+        RotationZ = 1 << 5,
+        ScaleX = 1 << 6,
+        ScaleY = 1 << 7,
+        ScaleZ = 1 << 8,
+    };
+
+    // -------------------------------------------------------
+    // Material Layer IDs
+    // -------------------------------------------------------
+    enum class XACMaterialLayer : uint8_t
+    {
+        Unknown = 0,
+        Ambient = 1,
+        Diffuse = 2,
+        Specular = 3,
+        Opacity = 4,
+        Bump = 5,
+        SelfIllum = 6,
+        Shine = 7,
+        ShineStrength = 8,
+        FilterColor = 9,
+        Reflect = 10,
+        Refract = 11,
+        Environment = 12,
+        Displacement = 13,
+        Force8Bit = 0xFF,
+    };
+    // -------------------------------------------------------
     // XACAttribute (strongly-typed enum)
     // -------------------------------------------------------
     enum class XACAttribute : uint32_t
