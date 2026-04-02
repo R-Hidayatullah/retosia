@@ -2,33 +2,23 @@
 #ifndef TSV_HPP
 #define TSV_HPP
 
-// ============================================================
-//  tsv.hpp  –  TSV file parser (C++20 port of tsv.rs)
-// ============================================================
-//  Dependencies: standard library only
-//  Requires:     C++20
-// ============================================================
-
+#include "thread_pool.hpp"
 #include <string>
 #include <vector>
 #include <fstream>
 #include <sstream>
-#include <future>
 #include <filesystem>
 #include <stdexcept>
+#include <future>
 #include <utility>
 
 namespace tsv
 {
 
-    // -------------------------------------------------------
-    //  TSVParser
-    //  Stateless helper class for parsing tab-separated files.
-    // -------------------------------------------------------
     class TSVParser
     {
     public:
-        // Parse a single TSV file into a 2-D grid of strings.
+        // Parse a single TSV file into a 2-D grid of strings
         static std::vector<std::vector<std::string>>
         parse_file(const std::filesystem::path &path)
         {
@@ -50,8 +40,7 @@ namespace tsv
             return rows;
         }
 
-        // Parse ETC.tsv and ITEM.tsv from a language folder in parallel.
-        // Returns { etc_data, item_data }.
+        // Parse ETC.tsv and ITEM.tsv in parallel using a ThreadPool
         static std::pair<std::vector<std::vector<std::string>>,
                          std::vector<std::vector<std::string>>>
         parse_language_data(const std::filesystem::path &lang_folder)
@@ -59,12 +48,12 @@ namespace tsv
             auto etc_path = lang_folder / "ETC.tsv";
             auto item_path = lang_folder / "ITEM.tsv";
 
-            auto fut_etc = std::async(std::launch::async,
-                                      [&]
-                                      { return parse_file(etc_path); });
-            auto fut_item = std::async(std::launch::async,
-                                       [&]
-                                       { return parse_file(item_path); });
+            tp::ThreadPool pool(2); // 2 threads are enough for ETC + ITEM
+
+            auto fut_etc = pool.submit(parse_file, etc_path);
+            auto fut_item = pool.submit(parse_file, item_path);
+
+            pool.wait_all(); // optional, ensures tasks finish before continuing
 
             return {fut_etc.get(), fut_item.get()};
         }
