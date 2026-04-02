@@ -3,7 +3,7 @@
 #define IPF_HPP
 
 // ============================================================
-//  ipf.hpp  –  IPF archive parser (C++20 port of ipf.rs)
+//  ipf.hpp  –  IPF archive parser (C++20)
 // ============================================================
 //  IPF is the archive format used by Tree of Savior.
 //  Files are stored with a PKzip-like footer, encrypted with a
@@ -16,27 +16,30 @@
 //
 //  Dependencies:
 //    - zlib  (link with -lz)   for raw DEFLATE decompression
+//    - thread_pool.hpp          for parallel parsing
 //    - C++ standard library
 //  Requires: C++20
 // ============================================================
 
 #include "binary_reader.hpp"
+#include "thread_pool.hpp"
+
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
-#include <string>
-#include <vector>
-#include <optional>
 #include <filesystem>
 #include <fstream>
-#include <stdexcept>
-#include <algorithm>
-#include <thread>
-#include <mutex>
 #include <future>
 #include <iostream>
 #include <map>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <thread>
 #include <unordered_map>
+#include <vector>
 
-// zlib for raw DEFLATE
 #include <zlib.h>
 
 namespace ipf
@@ -339,7 +342,7 @@ namespace ipf
         uint32_t file_table_pointer{0};
         uint16_t padding{0};
         uint32_t header_pointer{0};
-        uint32_t magic{0}; // must equal MAGIC_NUMBER
+        uint32_t magic{0};
         uint32_t version_to_patch{0};
         uint32_t new_version{0};
 
@@ -358,7 +361,7 @@ namespace ipf
     };
 
     // -------------------------------------------------------
-    //  Decryption helpers (static, no state)
+    //  Decryption helpers
     // -------------------------------------------------------
     namespace detail
     {
@@ -417,7 +420,6 @@ namespace ipf
             zs.next_out = dst.data();
             zs.avail_out = static_cast<uInt>(dst.size());
 
-            // -15 = raw DEFLATE (no zlib header)
             if (inflateInit2(&zs, -15) != Z_OK)
                 throw std::runtime_error("IPF: zlib inflateInit2 failed");
 
@@ -481,8 +483,6 @@ namespace ipf
             directory_name = std::string(dbuf.begin(), dbuf.end());
         }
 
-        // Extract (decrypt + decompress) and return raw bytes.
-        // Requires file_path to have been set after construction.
         std::vector<uint8_t> extract_data() const
         {
             if (!file_path)
@@ -515,16 +515,13 @@ namespace ipf
         IPFHeader header;
         std::vector<IPFFileTable> file_table;
 
-        // Read the archive from a file path.
         static IPFRoot from_file(const std::filesystem::path &path)
         {
-            // Open file to determine size
             std::ifstream f(path, std::ios::binary | std::ios::ate);
             if (!f)
                 throw std::runtime_error("IPF: cannot open: " + path.string());
             std::streampos file_size = f.tellg();
 
-            // Read the footer header (last 24 bytes)
             f.seekg(static_cast<std::streamoff>(file_size) + HEADER_LOCATION, std::ios::beg);
             std::vector<uint8_t> header_buf(24);
             f.read(reinterpret_cast<char *>(header_buf.data()), 24);
@@ -533,12 +530,11 @@ namespace ipf
             IPFRoot root;
             root.header.read(hr);
 
-            // Read file table
             f.seekg(root.header.file_table_pointer, std::ios::beg);
-            // Read enough bytes for the file table entries (read all remaining)
             std::vector<uint8_t> table_buf(
                 static_cast<std::size_t>(file_size) - root.header.file_table_pointer);
-            f.read(reinterpret_cast<char *>(table_buf.data()), static_cast<std::streamsize>(table_buf.size()));
+            f.read(reinterpret_cast<char *>(table_buf.data()),
+                   static_cast<std::streamsize>(table_buf.size()));
             binreader::BinaryReader tr(std::move(table_buf));
 
             root.file_table.resize(root.header.file_count);
@@ -547,7 +543,6 @@ namespace ipf
                 entry.read(tr);
                 entry.file_path = path;
 
-                // Prepend container stem to directory_name
                 std::filesystem::path container(entry.container_name);
                 auto stem = container.stem().string();
                 entry.directory_name = stem + "/" + entry.directory_name;
@@ -558,80 +553,28 @@ namespace ipf
     };
 
     // -------------------------------------------------------
-    //  Parallel batch parsing
+    //  Version helper
     // -------------------------------------------------------
-
-    // Parse all .ipf files in a directory with up to max_threads workers.
-    inline std::vector<IPFRoot> parse_all_ipf_files_limited_threads(
-        const std::filesystem::path &dir, unsigned max_threads = 4)
+    inline uint64_t extract_version_from_filename(const std::filesystem::path &p)
     {
-        std::vector<std::filesystem::path> paths;
-        for (auto &entry : std::filesystem::directory_iterator(dir))
-            if (entry.path().extension() == ".ipf")
-                paths.push_back(entry.path());
-
-        std::mutex paths_mutex, results_mutex;
-        std::size_t next_job = 0;
-        std::vector<IPFRoot> results;
-
-        auto worker = [&]()
+        auto name = p.stem().string();
+        auto pos = name.find('_');
+        std::string number_str = (pos == std::string::npos) ? name : name.substr(0, pos);
+        try
         {
-            for (;;)
-            {
-                std::filesystem::path p;
-                {
-                    std::scoped_lock lock(paths_mutex);
-                    if (next_job >= paths.size())
-                        return;
-                    p = paths[next_job++];
-                }
-                try
-                {
-                    auto root = IPFRoot::from_file(p);
-                    std::scoped_lock lock(results_mutex);
-                    results.push_back(std::move(root));
-                }
-                catch (const std::exception &e)
-                {
-                    std::cerr << "IPF: failed " << p << ": " << e.what() << '\n';
-                }
-            }
-        };
-
-        std::vector<std::thread> threads;
-        threads.reserve(max_threads);
-        for (unsigned i = 0; i < max_threads; ++i)
-            threads.emplace_back(worker);
-        for (auto &t : threads)
-            t.join();
-
-        return results;
-    }
-
-    // Parse game data/ and patch/ folders, merge results.
-    inline std::vector<IPFRoot> parse_game_ipfs(
-        const std::filesystem::path &game_root, unsigned max_threads = 4)
-    {
-        auto data_dir = game_root / "data";
-        auto patch_dir = game_root / "patch";
-
-        auto fut_data = std::async(std::launch::async, [&]
-                                   { return parse_all_ipf_files_limited_threads(data_dir, max_threads); });
-        auto fut_patch = std::async(std::launch::async, [&]
-                                    { return parse_all_ipf_files_limited_threads(patch_dir, max_threads); });
-
-        auto all = fut_data.get();
-        auto patch = fut_patch.get();
-        all.insert(all.end(),
-                   std::make_move_iterator(patch.begin()),
-                   std::make_move_iterator(patch.end()));
-        return all;
+            return std::stoull(number_str);
+        }
+        catch (...)
+        {
+            return 0;
+        }
     }
 
     // -------------------------------------------------------
     //  Hex dump utility
     // -------------------------------------------------------
-    inline void print_hex_viewer(const uint8_t *data, std::size_t size, std::ostream &os = std::cout)
+    inline void print_hex_viewer(const uint8_t *data, std::size_t size,
+                                 std::ostream &os = std::cout)
     {
         constexpr std::size_t BPL = 16;
         for (std::size_t i = 0; i < size; i += BPL)
@@ -660,133 +603,204 @@ namespace ipf
             os << '\n';
         }
     }
-
     inline void print_hex_viewer(const std::vector<uint8_t> &data, std::ostream &os = std::cout)
     {
         print_hex_viewer(data.data(), data.size(), os);
     }
 
-    inline uint64_t extract_version_from_filename(const std::filesystem::path &p)
-    {
-        auto name = p.stem().string(); // "153320_001001" or "addon"
-        auto pos = name.find('_');
-        if (pos == std::string::npos)
-        {
-            // No underscore, try to parse the entire stem as number
-            try
-            {
-                return std::stoull(name);
-            }
-            catch (...)
-            {
-                return 0; // fallback for non-numeric filenames
-            }
-        }
-        std::string number_str = name.substr(0, pos);
-        try
-        {
-            return std::stoull(number_str); // convert to uint64_t
-        }
-        catch (...)
-        {
-            return 0; // fallback if prefix is not numeric
-        }
-    }
+    // =============================================================
+    //  Parallel parsing via ThreadPool
+    // =============================================================
 
+    // ── Helper: parse one IPF file and push entries into `out_map` ──────────────
+    namespace detail
+    {
+        inline void parse_ipf_into_map(
+            const std::filesystem::path &path,
+            std::unordered_map<std::string, IPFFileTable> &out_map,
+            std::mutex &map_mutex)
+        {
+            std::ifstream f(path, std::ios::binary | std::ios::ate);
+            if (!f)
+                return;
+
+            auto file_size = f.tellg();
+            f.seekg(static_cast<std::streamoff>(file_size) + HEADER_LOCATION, std::ios::beg);
+
+            std::vector<uint8_t> header_buf(24);
+            f.read(reinterpret_cast<char *>(header_buf.data()), 24);
+            binreader::BinaryReader hr(std::move(header_buf));
+
+            IPFHeader header;
+            header.read(hr);
+
+            f.seekg(header.file_table_pointer, std::ios::beg);
+            std::vector<uint8_t> table_buf(
+                static_cast<std::size_t>(file_size) - header.file_table_pointer);
+            f.read(reinterpret_cast<char *>(table_buf.data()), table_buf.size());
+            binreader::BinaryReader tr(std::move(table_buf));
+
+            uint64_t version = extract_version_from_filename(path);
+
+            for (uint16_t i = 0; i < header.file_count; ++i)
+            {
+                IPFFileTable entry;
+                entry.read(tr);
+                entry.file_path = path;
+
+                auto stem = std::filesystem::path(entry.container_name).stem().string();
+                entry.directory_name = stem + "/" + entry.directory_name;
+
+                std::scoped_lock lock(map_mutex);
+                auto it = out_map.find(entry.directory_name);
+                if (it == out_map.end())
+                {
+                    out_map.emplace(entry.directory_name, std::move(entry));
+                }
+                else
+                {
+                    uint64_t existing_ver = extract_version_from_filename(*it->second.file_path);
+                    if (version > existing_ver)
+                        it->second = std::move(entry);
+                }
+            }
+        }
+    } // namespace detail
+
+    // ──────────────────────────────────────────────────────────────────────────
+    //  parse_game_ipfs_latest_streamed (ThreadPool overload)
+    //
+    //  Submits one task per IPF file to the pool.  The caller keeps ownership
+    //  of the pool, so the render thread's pool slot is never consumed.
+    // ──────────────────────────────────────────────────────────────────────────
     inline std::unordered_map<std::string, IPFFileTable>
-    parse_game_ipfs_latest_streamed(const std::filesystem::path &game_root, unsigned max_threads = 4)
+    parse_game_ipfs_latest_streamed(const std::filesystem::path &game_root,
+                                    tp::ThreadPool &pool)
     {
+        // Collect all IPF paths from data/ and patch/
         std::vector<std::filesystem::path> ipf_paths;
-
-        // Collect all IPF files from data/ and patch/
-        for (auto &dir : {game_root / "data", game_root / "patch"})
+        for (auto &sub : {game_root / "data", game_root / "patch"})
         {
-            if (!std::filesystem::exists(dir))
+            if (!std::filesystem::exists(sub))
                 continue;
-            for (auto &entry : std::filesystem::directory_iterator(dir))
+            for (auto &entry : std::filesystem::directory_iterator(sub))
                 if (entry.path().extension() == ".ipf")
                     ipf_paths.push_back(entry.path());
         }
 
         std::unordered_map<std::string, IPFFileTable> latest_files;
         std::mutex map_mutex;
-        std::atomic_size_t next_job{0};
 
-        auto worker = [&]()
+        // One future per IPF file
+        std::vector<std::future<void>> futures;
+        futures.reserve(ipf_paths.size());
+
+        for (const auto &path : ipf_paths)
         {
-            while (true)
-            {
-                std::size_t idx = next_job.fetch_add(1);
-                if (idx >= ipf_paths.size())
-                    return;
-
-                const auto &path = ipf_paths[idx];
-                try
+            futures.push_back(pool.submit(
+                [&latest_files, &map_mutex, path]()
                 {
-                    // Open file and read footer/header
-                    std::ifstream f(path, std::ios::binary | std::ios::ate);
-                    if (!f)
-                        continue;
-
-                    auto file_size = f.tellg();
-                    f.seekg(file_size + HEADER_LOCATION, std::ios::beg);
-                    std::vector<uint8_t> header_buf(24);
-                    f.read(reinterpret_cast<char *>(header_buf.data()), 24);
-                    binreader::BinaryReader hr(std::move(header_buf));
-
-                    IPFHeader header;
-                    header.read(hr);
-
-                    // Read file table metadata only
-                    f.seekg(header.file_table_pointer, std::ios::beg);
-                    std::vector<uint8_t> table_buf(
-                        static_cast<std::size_t>(file_size) - header.file_table_pointer);
-                    f.read(reinterpret_cast<char *>(table_buf.data()), table_buf.size());
-                    binreader::BinaryReader tr(std::move(table_buf));
-
-                    for (uint16_t i = 0; i < header.file_count; ++i)
+                    try
                     {
-                        IPFFileTable entry;
-                        entry.read(tr);
-                        entry.file_path = path;
-
-                        // Prepend container stem to directory_name
-                        auto stem = std::filesystem::path(entry.container_name).stem().string();
-                        entry.directory_name = stem + "/" + entry.directory_name;
-
-                        auto version = extract_version_from_filename(path);
-
-                        // Update latest version safely
-                        {
-                            std::scoped_lock lock(map_mutex);
-                            auto it = latest_files.find(entry.directory_name);
-                            if (it == latest_files.end())
-                                latest_files[entry.directory_name] = entry;
-                            else
-                            {
-                                auto existing_version = extract_version_from_filename(*it->second.file_path);
-                                if (version > existing_version)
-                                    latest_files[entry.directory_name] = entry;
-                            }
-                        }
+                        detail::parse_ipf_into_map(path, latest_files, map_mutex);
                     }
-                }
-                catch (const std::exception &e)
-                {
-                    std::cerr << "IPF: failed " << path << ": " << e.what() << "\n";
-                }
-            }
-        };
+                    catch (const std::exception &e)
+                    {
+                        std::cerr << "[IPF] failed " << path << ": " << e.what() << '\n';
+                    }
+                }));
+        }
 
-        std::vector<std::thread> threads;
-        threads.reserve(max_threads);
-        for (unsigned i = 0; i < max_threads; ++i)
-            threads.emplace_back(worker);
-
-        for (auto &t : threads)
-            t.join();
+        // Wait for every submitted task to complete
+        for (auto &f : futures)
+            f.get();
 
         return latest_files;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    //  Legacy overload – spawns its own threads (kept for backward compat)
+    // ──────────────────────────────────────────────────────────────────────────
+    inline std::unordered_map<std::string, IPFFileTable>
+    parse_game_ipfs_latest_streamed(const std::filesystem::path &game_root,
+                                    unsigned max_threads = 4)
+    {
+        tp::ThreadPool local_pool(max_threads);
+        return parse_game_ipfs_latest_streamed(game_root, local_pool);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    //  parse_all_ipf_files (ThreadPool overload)
+    // ──────────────────────────────────────────────────────────────────────────
+    inline std::vector<IPFRoot>
+    parse_all_ipf_files(const std::filesystem::path &dir, tp::ThreadPool &pool)
+    {
+        std::vector<std::filesystem::path> paths;
+        for (auto &entry : std::filesystem::directory_iterator(dir))
+            if (entry.path().extension() == ".ipf")
+                paths.push_back(entry.path());
+
+        std::mutex results_mutex;
+        std::vector<IPFRoot> results;
+        results.reserve(paths.size());
+
+        std::vector<std::future<void>> futures;
+        futures.reserve(paths.size());
+
+        for (const auto &p : paths)
+        {
+            futures.push_back(pool.submit(
+                [&results, &results_mutex, p]()
+                {
+                    try
+                    {
+                        auto root = IPFRoot::from_file(p);
+                        std::scoped_lock lock(results_mutex);
+                        results.push_back(std::move(root));
+                    }
+                    catch (const std::exception &e)
+                    {
+                        std::cerr << "[IPF] failed " << p << ": " << e.what() << '\n';
+                    }
+                }));
+        }
+
+        for (auto &f : futures)
+            f.get();
+        return results;
+    }
+
+    // Legacy thread-count overload
+    inline std::vector<IPFRoot>
+    parse_all_ipf_files_limited_threads(const std::filesystem::path &dir,
+                                        unsigned max_threads = 4)
+    {
+        tp::ThreadPool local_pool(max_threads);
+        return parse_all_ipf_files(dir, local_pool);
+    }
+
+    // parse_game_ipfs merges data/ + patch/ roots (legacy API, uses pool internally)
+    inline std::vector<IPFRoot>
+    parse_game_ipfs(const std::filesystem::path &game_root, tp::ThreadPool &pool)
+    {
+        auto data_fut = pool.submit([&]
+                                    { return parse_all_ipf_files(game_root / "data", pool); });
+        auto patch_fut = pool.submit([&]
+                                     { return parse_all_ipf_files(game_root / "patch", pool); });
+
+        auto all = data_fut.get();
+        auto patch = patch_fut.get();
+        all.insert(all.end(),
+                   std::make_move_iterator(patch.begin()),
+                   std::make_move_iterator(patch.end()));
+        return all;
+    }
+
+    inline std::vector<IPFRoot>
+    parse_game_ipfs(const std::filesystem::path &game_root, unsigned max_threads = 4)
+    {
+        tp::ThreadPool local_pool(max_threads);
+        return parse_game_ipfs(game_root, local_pool);
     }
 
 } // namespace ipf

@@ -45,7 +45,7 @@ target_compile_features(retosia PRIVATE cxx_std_20)
 # External includes
 # =========================
 target_include_directories(retosia PRIVATE
-    external/glm-1.0.3
+    external/glm-1.0.3/glm
     external/glad33extcore/include
     external/glfw-3.4.bin.WIN64/include
     external/dr_libs-master
