@@ -1,11 +1,13 @@
 #if !defined(SCENE_BUILDER_HPP)
 #define SCENE_BUILDER_HPP
 #pragma once
+
 #include "scene.hpp"
 #include "world_parser.hpp"
 #include "xac.hpp"
 #include "ipf_manager.hpp"
 #include <unordered_map>
+#include <algorithm>
 
 namespace loader
 {
@@ -44,9 +46,50 @@ namespace loader
 
             for (const auto &model : world.models)
             {
-                std::string model_path = build_model_path(world, model);
+                std::vector<uint8_t> bytes;
+                bool found = false;
 
-                auto bytes = ipf_->extract(model_path);
+                std::string file = normalize(model.file);
+
+                for (const auto &dir : world.model_dirs)
+                {
+                    std::string base = normalize(dir.path);
+
+                    std::vector<std::string> ipfs = {
+                        normalize(dir.ipf_name),
+                        "bg_hi2",
+                        "bg_hi3"};
+
+                    for (const auto &ipf : ipfs)
+                    {
+                        std::vector<std::string> candidates = {
+                            ipf + "/" + base + "/" + file,
+                            ipf + "/" + file};
+
+                        for (auto &p : candidates)
+                        {
+                            std::string full_path = normalize(p);
+
+                            if (ipf_->exists(full_path))
+                            {
+                                bytes = ipf_->extract(full_path);
+                                found = true;
+                                break;
+                            }
+                        }
+
+                        if (found)
+                            break;
+                    }
+
+                    if (found)
+                        break;
+                }
+
+                if (!found)
+                {
+                    throw std::runtime_error("Model not found in any IPF: " + model.file);
+                }
 
                 xac::XACRoot xac_root = xac::XACRoot::from_bytes(bytes);
 
@@ -77,21 +120,19 @@ namespace loader
 
         // ------------------- HELPERS -------------------
 
-        static std::string normalize(const std::string &p)
+        static std::string normalize(std::string s)
         {
-            std::string s = p;
             std::replace(s.begin(), s.end(), '\\', '/');
+
+            size_t pos = 0;
+            while ((pos = s.find("//", pos)) != std::string::npos)
+                s.erase(pos, 1);
+
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](unsigned char c)
+                           { return std::tolower(c); });
+
             return s;
-        }
-
-        static std::string build_model_path(const world_parser::World &w,
-                                            const world_parser::Model &m)
-        {
-            auto ipf = normalize(w.model_dirs[0].ipf_name);
-            auto base = normalize(w.model_dirs[0].path);
-            auto file = normalize(m.file);
-
-            return ipf + "/" + base + "/" + file;
         }
 
         static std::string get_ext(const std::string &p)
@@ -102,7 +143,9 @@ namespace loader
 
         static std::string to_lower(std::string s)
         {
-            std::ranges::transform(s, s.begin(), ::tolower);
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](unsigned char c)
+                           { return std::tolower(c); });
             return s;
         }
 
@@ -133,4 +176,4 @@ namespace loader
     };
 }
 
-#endif // SCENE_BUILDER_HPP
+#endif

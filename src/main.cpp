@@ -345,14 +345,14 @@ int main()
             try
             {
                 ipf_manager_ptr = std::make_shared<loader::IPFManager>(
-                    R"(C:\Program Files (x86)\Steam\steamapps\common\TreeOfSavior)", pool);
+                    R"(C:\Users\Ridwan Hidayatullah\Documents\TreeOfSaviorCN)", pool);
 
                 auto data = ipf_manager_ptr->extract("ies_client/xac.ies");
                 auto ies_root = ies::IESRoot::from_bytes(data);
                 auto mesh_map = ies_root.extract_mesh_path_map();
 
                 loader::SceneLoader loader(ipf_manager_ptr, mesh_map);
-                std::string path = "bg/hi_entity/id_thorn2.3dworld";
+                std::string path = "bg/hi_entity/training_zone.3dworld";
                 auto data3d = ipf_manager_ptr->extract(path);
                 auto scenes = loader.load(path, data3d);
 

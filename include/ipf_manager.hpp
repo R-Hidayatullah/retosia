@@ -1,4 +1,4 @@
-#if !defined(IPF_MANAGER_HPP)
+#ifndef IPF_MANAGER_HPP
 #define IPF_MANAGER_HPP
 
 #pragma once
@@ -16,15 +16,15 @@ namespace loader
     public:
         explicit IPFManager(const std::filesystem::path &root, tp::ThreadPool &pool)
         {
-            // Parse IPFs and normalize paths for consistent lookup
             auto raw_files = ipf::parse_game_ipfs_latest_streamed(root, pool);
+
             for (auto &kv : raw_files)
             {
                 files_.emplace(normalize_path(kv.first), std::move(kv.second));
             }
         }
 
-        // Find latest file (normalized path)
+        // ---------- Fast lookup ----------
         const ipf::IPFFileTable *find_latest(const std::string &path) const
         {
             auto it = files_.find(normalize_path(path));
@@ -33,7 +33,11 @@ namespace loader
             return &it->second;
         }
 
-        // Extract file data by normalized path
+        bool exists(const std::string &path) const
+        {
+            return find_latest(path) != nullptr;
+        }
+
         std::vector<uint8_t> extract(const std::string &path) const
         {
             auto file = find_latest(path);
@@ -46,27 +50,24 @@ namespace loader
     private:
         std::unordered_map<std::string, ipf::IPFFileTable> files_;
 
-        // Normalize path: lowercase, forward slashes, remove duplicate slashes
-        static std::string normalize_path(const std::string &path)
+        static std::string normalize_path(std::string path)
         {
-            std::string result = path;
+            // slash normalize
+            std::replace(path.begin(), path.end(), '\\', '/');
 
-            // Replace backslashes with forward slashes
-            std::replace(result.begin(), result.end(), '\\', '/');
-
-            // Remove duplicate slashes
+            // remove duplicate slashes
             size_t pos = 0;
-            while ((pos = result.find("//", pos)) != std::string::npos)
-                result.erase(pos, 1);
+            while ((pos = path.find("//", pos)) != std::string::npos)
+                path.erase(pos, 1);
 
-            // Convert to lowercase for case-insensitive lookup
-            std::transform(result.begin(), result.end(), result.begin(),
+            // lowercase
+            std::transform(path.begin(), path.end(), path.begin(),
                            [](unsigned char c)
                            { return std::tolower(c); });
 
-            return result;
+            return path;
         }
     };
 }
 
-#endif // IPF_MANAGER_HPP
+#endif
